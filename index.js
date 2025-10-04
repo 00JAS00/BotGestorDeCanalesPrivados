@@ -4,7 +4,7 @@ const {
   Client, GatewayIntentBits, Partials, PermissionsBitField, ChannelType, REST, Routes, SlashCommandBuilder 
 } = require("discord.js");
 
-const { TOKEN, CLIENT_ID, GUILD_ID } = process.env;
+const { TOKEN, CLIENT_ID } = process.env;
 
 const client = new Client({
   intents: [
@@ -50,24 +50,34 @@ const commands = [
     .setDescription("Cierra tu sala manualmente"),
 ].map(cmd => cmd.toJSON());
 
-// Registrar comandos (globales o para servidor específico)
+// Función para registrar comandos en un servidor específico
 const rest = new REST({ version: '10' }).setToken(TOKEN);
-(async () => {
+async function registrarComandosServidor(guildId) {
   try {
-    if (GUILD_ID) {
-      // Registro en servidor específico (aparecen al instante)
-      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-      console.log("✅ Comandos slash registrados para el servidor (instantáneo).");
-    } else {
-      // Registro global (demora hasta 1 hora)
-      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-      console.log("✅ Comandos slash registrados globalmente (pueden tardar hasta 1 hora).");
-    }
-  } catch (err) { console.error(err); }
-})();
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: commands });
+    console.log(`✅ Comandos registrados instantáneamente para servidor: ${guildId}`);
+  } catch (err) {
+    console.error(`❌ Error al registrar comandos en servidor ${guildId}:`, err);
+  }
+}
 
 // ===== Eventos =====
-client.once("ready", () => console.log(`✅ Bot listo como ${client.user.tag}`));
+client.once("ready", async () => {
+  console.log(`✅ Bot listo como ${client.user.tag}`);
+  
+  // Registrar comandos para todos los servidores actuales
+  console.log(`📋 Registrando comandos en ${client.guilds.cache.size} servidor(es)...`);
+  for (const guild of client.guilds.cache.values()) {
+    await registrarComandosServidor(guild.id);
+  }
+  console.log('✅ Todos los comandos registrados exitosamente.');
+});
+
+// Evento cuando el bot se une a un servidor nuevo
+client.on("guildCreate", async (guild) => {
+  console.log(`🆕 Bot agregado a nuevo servidor: ${guild.name} (${guild.id})`);
+  await registrarComandosServidor(guild.id);
+});
 
 client.on("interactionCreate", async interaction => {
   if (!interaction.isCommand()) return;
