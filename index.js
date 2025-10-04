@@ -4,7 +4,7 @@ const {
   Client, GatewayIntentBits, Partials, PermissionsBitField, ChannelType, REST, Routes, SlashCommandBuilder 
 } = require("discord.js");
 
-const { TOKEN, CLIENT_ID } = process.env; // ya no necesitamos GUILD_ID para bot público
+const { TOKEN, CLIENT_ID, GUILD_ID } = process.env;
 
 const client = new Client({
   intents: [
@@ -22,14 +22,14 @@ const commands = [
   new SlashCommandBuilder()
     .setName("sala")
     .setDescription("Crea una sala de voz privada")
-    .addStringOption(option => 
-      option.setName("nombre")
-            .setDescription("Nombre del canal (opcional)")
-            .setRequired(false))
     .addIntegerOption(option =>
       option.setName("max")
             .setDescription("Cantidad máxima de miembros")
-            .setRequired(true)),
+            .setRequired(true))
+    .addStringOption(option => 
+      option.setName("nombre")
+            .setDescription("Nombre del canal (opcional)")
+            .setRequired(false)),
 
   new SlashCommandBuilder()
     .setName("invitar")
@@ -50,12 +50,19 @@ const commands = [
     .setDescription("Cierra tu sala manualmente"),
 ].map(cmd => cmd.toJSON());
 
-// Registrar comandos globales (para cualquier servidor)
+// Registrar comandos (globales o para servidor específico)
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 (async () => {
   try {
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-    console.log("✅ Comandos slash registrados globalmente.");
+    if (GUILD_ID) {
+      // Registro en servidor específico (aparecen al instante)
+      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+      console.log("✅ Comandos slash registrados para el servidor (instantáneo).");
+    } else {
+      // Registro global (demora hasta 1 hora)
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+      console.log("✅ Comandos slash registrados globalmente (pueden tardar hasta 1 hora).");
+    }
   } catch (err) { console.error(err); }
 })();
 
@@ -73,10 +80,27 @@ client.on("interactionCreate", async interaction => {
 
   // ===== CREAR SALA =====
   if (commandName === "sala") {
+    // Verificar si el usuario ya tiene una sala activa
+    const salaExistente = [...salas.values()].find(s => s.dueñoId === member.id);
+    if (salaExistente) {
+      return interaction.reply({ 
+        content: "⚠️ Ya tienes una sala activa. Usa `/cerrar` para cerrar tu sala actual antes de crear una nueva.", 
+        ephemeral: true 
+      });
+    }
+
     const nombreCanal = options.getString("nombre") || `canal-privado-${member.user.username}`;
     const maxMiembros = options.getInteger("max") || 5;
 
-    const rol = await guild.roles.create({ name: `Sala-${member.user.username}`, permissions: [] });
+    // Verificar si ya existe un rol con la misma nomenclatura
+    const nombreRol = `Sala-${member.user.username}`;
+    let rol = guild.roles.cache.find(r => r.name === nombreRol);
+    
+    if (!rol) {
+      // Crear nuevo rol si no existe
+      rol = await guild.roles.create({ name: nombreRol, permissions: [] });
+    }
+    
     await member.roles.add(rol);
 
     const canal = await guild.channels.create({
@@ -90,14 +114,10 @@ client.on("interactionCreate", async interaction => {
 
     salas.set(canal.id, { dueñoId: member.id, rolId: rol.id, maxMiembros });
 
-    const msg = await canal.send(`✅ Sala creada:
-🏷️ Nombre: ${canal.name}
-👑 Dueño: ${member.user.tag}
-👥 Miembros permitidos: ${maxMiembros}
-📅 Expira en 30 días`);
-    await msg.pin();
-
-    await interaction.reply({ content: `✅ Tu sala ha sido creada: ${canal}`, ephemeral: true });
+    await interaction.reply({ 
+      content: `✅ **Sala creada exitosamente!**\n🏷️ Nombre: ${canal.name}\n👑 Dueño: ${member.user.tag}\n👥 Miembros permitidos: ${maxMiembros}\n📅 Expira en 30 días\n\n${canal}`, 
+      ephemeral: true 
+    });
   }
 
   // ===== INVITAR =====
@@ -147,6 +167,25 @@ client.on("interactionCreate", async interaction => {
     salas.delete(canalId);
 
     interaction.reply({ content: `✅ Tu sala ha sido cerrada.`, ephemeral: true });
+  }
+});
+
+// ===== EVENTO: CANAL ELIMINADO MANUALMENTE =====
+client.on("channelDelete", async (canal) => {
+  if (canal.type !== ChannelType.GuildVoice) return;
+  
+  const guild = canal.guild;
+  if (!servidoresSalas.has(guild.id)) return;
+  
+  const salas = servidoresSalas.get(guild.id);
+  const sala = salas.get(canal.id);
+  
+  if (sala) {
+    // Eliminar el rol asociado cuando se borra el canal manualmente
+    const rol = guild.roles.cache.get(sala.rolId);
+    if (rol) await rol.delete().catch(() => {});
+    salas.delete(canal.id);
+    console.log(`🗑️ Sala ${canal.name} eliminada manualmente - Rol también eliminado.`);
   }
 });
 
