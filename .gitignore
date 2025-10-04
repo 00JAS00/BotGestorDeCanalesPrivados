@@ -1,0 +1,3 @@
+# Dependencias locales (generadas por npm o yarn)
+/node_modules
+.env
